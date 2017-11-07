@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/modest-sql/data"
 	"github.com/modest-sql/parser"
 )
 
@@ -35,8 +36,8 @@ type Server struct {
 	serverMutex  sync.Mutex
 }
 
-//Init initialice a server
-func Init() *Server {
+//NewServer server constructor
+func NewServer() *Server {
 	server := &Server{
 		sessions:     make(map[int]*Session),
 		transactions: make(map[int]*Transaction),
@@ -45,10 +46,12 @@ func Init() *Server {
 		Entrance:     make(chan net.Conn),
 		Incoming:     make(chan ResIncome),
 		outgoing:     make(chan ResOutcome),
-		//		serverMutex:
 	}
-	fmt.Println("A new Server created.")
 	return server
+}
+
+func start() {
+
 }
 
 func (server *Server) createTransaction(sid int, commands []interface{}) {
@@ -102,13 +105,13 @@ func (server *Server) Join(connection net.Conn) {
 
 func (server *Server) handleRequest(response ResIncome) {
 
-	var data ResOutcome
-	err := json.Unmarshal(response.data[:response.dataLength], &data)
+	var pdata ResOutcome
+	err := json.Unmarshal(response.data[:response.dataLength], &pdata)
 	if err != nil {
 		fmt.Println("Error decoding answer:", err)
 	} else {
-		fmt.Println(data)
-		switch data.Type {
+		fmt.Println(pdata)
+		switch pdata.Type {
 		case 0:
 			answer := ResOutcome{0, "_"}
 			b, err := json.Marshal(answer)
@@ -119,19 +122,44 @@ func (server *Server) handleRequest(response ResIncome) {
 			}
 		case 1:
 			//to-do metadata
-			answer := ResOutcome{1, "{\"DB_Name\": \"Mocca DB\",\"Tables\": [{\"Table_Name\": \"Employee\", \"ColumnNames\": [\"First Name\", \"Second Name\", \"First Last Name\", \"Second Last Name\", \"Age\", \"Married\"],\"ColumnTypes\": [\"char[100]\", \"char[100]\", \"char[100]\", \"char[100]\", \"int\", \"boolean\"]},{\"Table_Name\": \"Department\", \"ColumnNames\": [\"Department Name\", \"Description\", \"Address\"],\"ColumnTypes\": [\"char[100]\", \"char[100]\", \"char[100]\"]}]}"}
-			b, err := json.Marshal(answer)
-			if err != nil {
-				fmt.Println("Error encoding metadata:", err)
-			} else {
-				server.WriteToSession(response.sessionID, b)
+			databaseName := "mock.db"
+			type Database struct {
+				DbNAme string        `json:"DB_Name"`
+				Tables []*data.Table `json:"Tables"`
 			}
+
+			database, err := data.LoadDatabase(databaseName)
+
+			if err != nil {
+				fmt.Println("Something Happened", err)
+			} else {
+				tables, err := database.AllTables()
+				if err != nil {
+					fmt.Println("Something Happened two", err)
+				} else {
+					datab := Database{databaseName, tables}
+					c, err := json.Marshal(datab)
+					if err != nil {
+						fmt.Println("Error encoding metadata:", err)
+					}
+
+					answer := ResOutcome{1, string(c)}
+					b, err := json.Marshal(answer)
+					if err != nil {
+						fmt.Println("Error encoding metadata:", err)
+					} else {
+						fmt.Println(answer)
+						server.WriteToSession(response.sessionID, b)
+					}
+				}
+			}
+
 		case 2:
-			reader := bytes.NewReader([]byte(data.Data))
+			reader := bytes.NewReader([]byte(pdata.Data))
 			commands, err := parser.Parse(reader)
 
 			if err != nil {
-				fmt.Println("err" + string([]byte("[{\"Error\":\""+err.Error()+"\"}]")))
+				fmt.Println("err" + "[{\"Error\":\"" + err.Error() + "\"}]")
 				answer := ResOutcome{4, "[{\"Error\":\"" + err.Error() + "\"}]"}
 				b, err := json.Marshal(answer)
 				if err != nil {
@@ -140,16 +168,32 @@ func (server *Server) handleRequest(response ResIncome) {
 					server.WriteToSession(response.sessionID, b)
 				}
 			} else {
-				answer := ResOutcome{2, "[{\"Name\":\"Jesus\",\"Age\":\"23\",\"Job\":\"Meme master\"},{\"Name\":\"Soware\",\"Age\":\"22\",\"Job\":\"Asaber\"},{\"Name\":\"FEC\",\"Age\":\"21\",\"Job\":\"Zizizi\"}]"}
-				b, err := json.Marshal(answer)
-				if err != nil {
-					fmt.Println("Error encoding table:", err)
-				} else {
-					server.WriteToSession(response.sessionID, b)
-					server.createTransaction(response.sessionID, commands)
-					server.printTransactions()
-				}
+				databaseName := "mock.db"
+				db, err := data.LoadDatabase(databaseName)
 
+				if err != nil {
+					fmt.Println(err)
+				} else {
+
+					resultSet, err := db.ReadTable("MOVIES")
+					if err != nil {
+						fmt.Println(err)
+					}
+
+					str, err := json.Marshal(resultSet.Rows)
+
+					answer := ResOutcome{2, string(str)}
+					b, err := json.Marshal(answer)
+
+					if err != nil {
+						fmt.Println("Error encoding table:", err)
+					} else {
+						fmt.Println(answer)
+						server.WriteToSession(response.sessionID, b)
+						server.createTransaction(response.sessionID, commands)
+						server.printTransactions()
+					}
+				}
 			}
 		default:
 			fmt.Println("Fomen Fabian E. Canizales")
