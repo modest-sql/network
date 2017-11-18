@@ -2,77 +2,126 @@ package network
 
 import (
 	"bufio"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 )
 
-//Session a
+const (
+	chunkSize = 256
+)
+
+//Session stores info from client
 type Session struct {
-	sid                       int
-	disrty                    bool
-	server                    *Server
-	connection                net.Conn
-	incoming                  chan ResIncome
-	outgoing                  chan []byte
-	reader                    *bufio.Reader
-	writer                    *bufio.Writer
-	killRoomConnGoroutine     chan bool
-	killSocketReaderGoroutine chan bool
-	killSocketWriterGoroutine chan bool
-	sessionMutex              sync.Mutex
+	ID         int64
+	server     *Server
+	connection net.Conn
+	writer     *bufio.Writer
+	reader     *bufio.Reader
+	outgoing   chan Response
+	quitReader chan bool
+	quitWriter chan bool
 }
 
-//NewSession a
-func NewSession(sid int, server *Server, connection net.Conn) *Session {
+//NewSession constructs the session
+func NewSession(ID int64, server *Server, connection net.Conn) *Session {
 	writer := bufio.NewWriter(connection)
 	reader := bufio.NewReader(connection)
-
 	session := &Session{
-		sid:                       sid,
-		server:                    server,
-		connection:                connection,
-		incoming:                  make(chan ResIncome),
-		outgoing:                  make(chan []byte),
-		reader:                    reader,
-		writer:                    writer,
-		killRoomConnGoroutine:     make(chan bool),
-		killSocketReaderGoroutine: make(chan bool),
-		killSocketWriterGoroutine: make(chan bool),
-		//		sessionMutex:
+		ID:         ID,
+		server:     server,
+		connection: connection,
+		writer:     writer,
+		reader:     reader,
+		outgoing:   make(chan Response),
+		quitReader: make(chan bool),
+		quitWriter: make(chan bool),
 	}
-	fmt.Println("A new session created. sid=", sid)
+	session.listen()
 	return session
+}
+
+func (session *Session) leave() {
+	server := session.server
+	session.quitWriter <- true
+	session.quitReader <- true
+	session.connection.Close()
+	server.mutex.Lock()
+	delete(session.server.sessions, session.ID)
+	server.mutex.Unlock()
+}
+
+func (session *Session) listen() {
+	go session.Read()
+	go session.Write()
 }
 
 func (session *Session) Read() {
 	for {
 		select {
-		case <-session.killSocketReaderGoroutine:
+		case <-session.quitReader:
 			return
 		default:
-			buffer := make([]byte, 1024)
-			len, err := session.reader.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					fmt.Println("Client disconnected. Destroy session, sid=", session.sid)
-					session.LeaveAndDelete()
-				}
 
-				// else:
-				fmt.Println("error reading.")
-				fmt.Println(err)
-				time.Sleep(100 * time.Millisecond)
+			//Read the length prefix
+			prefix := make([]byte, 4)
+			prefixlen, err := session.reader.Read(prefix)
+			if prefixlen != 4 || err != nil {
+				if err == io.EOF {
+					fmt.Println("Client disconnected ID= ", session.ID)
+					session.leave()
+					continue
+				}
+				fmt.Println("Error reading prefix.", err)
 				continue
 			}
-			response := ResIncome{
-				sessionID:  session.sid,
-				dataLength: len,
-				data:       buffer,
+			length := binary.BigEndian.Uint32(prefix)
+
+			//Read and join the chunks of data
+			message := make([]byte, length)
+			chunk := make([]byte, chunkSize)
+
+			var chunkAmount int
+			if length%chunkSize == 0 {
+				chunkAmount = int(length) / chunkSize
+			} else {
+				chunkAmount = int(length)/chunkSize + 1
 			}
-			session.incoming <- response
+			for i := 0; i < chunkAmount; i++ {
+				len, err := session.reader.Read(chunk)
+				if err != nil {
+					if err == io.EOF {
+						fmt.Println("Client disconnected ID= ", session.ID)
+						session.leave()
+						continue
+					}
+					fmt.Println("Error reading message.", err)
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
+				message = append(message, chunk[:len]...)
+			}
+
+			//Trim excess allocation
+			message = message[length:]
+
+			//Decode the json message into a response
+			var response Response
+			err = json.Unmarshal(message[:length], &response)
+			if err != nil {
+				fmt.Println("Error decoding answer:", err, len(message), length)
+				continue
+			}
+
+			fmt.Println("Reading", response)
+			//Send the response to the server channel
+			session.server.RequestQueue <- Request{
+				SessionID: session.ID,
+				Response:  response,
+			}
 		}
 	}
 }
@@ -80,48 +129,47 @@ func (session *Session) Read() {
 func (session *Session) Write() {
 	for {
 		select {
-		case <-session.killSocketWriterGoroutine:
+		case <-session.quitWriter:
 			return
-		case data := <-session.outgoing:
-			session.writer.Write(data)
+		case response := <-session.outgoing:
+			encoded, err := json.Marshal(response)
+			if err != nil {
+				fmt.Println("Error encoding:", err)
+				continue
+			}
+
+			prefix := make([]byte, 4)
+			binary.BigEndian.PutUint32(prefix, uint32(len(encoded)))
+
+			_, err = session.writer.Write(prefix)
+			if err != nil {
+				fmt.Println("Error writing message.", err)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			chunks := split(encoded, 256)
+			for _, chunk := range chunks {
+				_, err = session.writer.Write(chunk)
+				if err != nil {
+					fmt.Println("Error writing chunk.", err)
+					break
+				}
+			}
+			fmt.Println("Sending", response)
 			session.writer.Flush()
 		}
 	}
 }
 
-//Listen a
-func (session *Session) Listen() {
-	go session.Read()
-	go session.Write()
-}
-
-//LeaveAndDelete a
-func (session *Session) LeaveAndDelete() {
-	server := *session.server
-	sid := session.sid
-	server.serverMutex.Lock()
-	defer server.serverMutex.Unlock()
-	delete(server.sessions, sid)
-
-	// delete
-
-	session.sessionMutex.Lock()
-	defer session.sessionMutex.Unlock()
-
-	// release resources
-
-	// resouce: socket reader goroutine & socket writer goroutine
-	session.killSocketReaderGoroutine <- true
-	session.killSocketWriterGoroutine <- true
-
-	// resource: reader & writer
-	session.reader = nil
-	session.writer = nil
-
-	// resource: socket conection
-	session.connection.Close()
-	session.connection = nil
-
-	// resource: RoomConnGoroutine
-	session.killRoomConnGoroutine <- true
+func split(buf []byte, lim int) [][]byte {
+	var chunk []byte
+	chunks := make([][]byte, 0, len(buf)/lim+1)
+	for len(buf) >= lim {
+		chunk, buf = buf[:lim], buf[lim:]
+		chunks = append(chunks, chunk)
+	}
+	if len(buf) > 0 {
+		chunks = append(chunks, buf[:len(buf)])
+	}
+	return chunks
 }
