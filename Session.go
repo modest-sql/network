@@ -53,6 +53,11 @@ func (session *Session) leave() {
 	server.mutex.Lock()
 	delete(session.server.sessions, session.ID)
 	server.mutex.Unlock()
+
+	session.server.RequestQueue <- Request{
+		SessionID: session.ID,
+		Response:  Response{Type: SessionExited, Data: "-"},
+	}
 }
 
 func (session *Session) listen() {

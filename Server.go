@@ -33,6 +33,7 @@ const (
 	ShowTransaction                           //207
 	Error                                     //208
 	Notification                              //209
+	SessionExited                             //210
 )
 
 //Server handles input and output from engine
