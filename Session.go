@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"time"
 )
@@ -68,41 +69,32 @@ func (session *Session) Read() {
 
 			//Read the length prefix
 			prefix := make([]byte, 4)
-			prefixlen, err := session.reader.Read(prefix)
-			if prefixlen != 4 || err != nil {
-				if err == io.EOF {
-					fmt.Println("Client disconnected ID= ", session.ID)
-					session.leave()
-					continue
-				}
-				fmt.Println("Error reading prefix.", err)
-				continue
-			}
-			length := binary.BigEndian.Uint32(prefix)
+			readLength, err := session.reader.Read(prefix)
+			length := int(binary.BigEndian.Uint32(prefix))
 
 			//Read and join the chunks of data
+			chunkAmount := int(math.Ceil(float64(length) / float64(chunkSize)))
 			message := make([]byte, length)
 			chunk := make([]byte, chunkSize)
 
-			var chunkAmount int
-			if length%chunkSize == 0 {
-				chunkAmount = int(length) / chunkSize
-			} else {
-				chunkAmount = int(length)/chunkSize + 1
+			for i := 0; i < chunkAmount-1; i++ {
+				readLength, err = io.ReadFull(session.reader, chunk)
+				message = append(message, chunk[:readLength]...)
 			}
-			for i := 0; i < chunkAmount; i++ {
-				len, err := session.reader.Read(chunk)
-				if err != nil {
-					if err == io.EOF {
-						fmt.Println("Client disconnected ID= ", session.ID)
-						session.leave()
-						continue
-					}
-					fmt.Println("Error reading message.", err)
-					time.Sleep(100 * time.Millisecond)
-					continue
+
+			lastChunk := make([]byte, length-((chunkAmount-1)*chunkSize))
+			readLength, err = io.ReadFull(session.reader, lastChunk)
+			message = append(message, lastChunk[:readLength]...)
+
+			if err != nil {
+				if err == io.ErrUnexpectedEOF || err == io.EOF {
+					fmt.Println("Client disconnected ID= ", session.ID)
+					session.leave()
+					break
 				}
-				message = append(message, chunk[:len]...)
+				fmt.Println("Error reading message.", err)
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 
 			//Trim excess allocation
@@ -112,7 +104,7 @@ func (session *Session) Read() {
 			var response Response
 			err = json.Unmarshal(message[:length], &response)
 			if err != nil {
-				fmt.Println("Error decoding answer:", err, len(message), length)
+				fmt.Println("Error decoding answer:", err)
 				continue
 			}
 
@@ -137,24 +129,22 @@ func (session *Session) Write() {
 				fmt.Println("Error encoding:", err)
 				continue
 			}
-
+			//Write Prefix
 			prefix := make([]byte, 4)
 			binary.BigEndian.PutUint32(prefix, uint32(len(encoded)))
-
 			_, err = session.writer.Write(prefix)
-			if err != nil {
-				fmt.Println("Error writing message.", err)
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-			chunks := split(encoded, 256)
+
+			//Write chunks
+			chunks := split(encoded, chunkSize)
 			for _, chunk := range chunks {
 				_, err = session.writer.Write(chunk)
-				if err != nil {
-					fmt.Println("Error writing chunk.", err)
-					break
-				}
 			}
+
+			if err != nil {
+				fmt.Println("Error writing.", err)
+				break
+			}
+
 			fmt.Println("Sending", response)
 			session.writer.Flush()
 		}
