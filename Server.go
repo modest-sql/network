@@ -70,3 +70,8 @@ func (server *Server) Join(conn net.Conn) {
 func (server *Server) Send(sessionID int64, response Response) {
 	server.sessions[sessionID].outgoing <- response
 }
+
+//GetSessionsAmount returns amount of current tcp conections
+func (server *Server) GetSessionsAmount() int {
+	return len(server.sessions)
+}
