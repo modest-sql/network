@@ -47,17 +47,17 @@ func NewSession(ID int64, server *Server, connection net.Conn) *Session {
 
 func (session *Session) leave() {
 	server := session.server
+	server.RequestQueue <- Request{
+		SessionID: session.ID,
+		Response:  Response{Type: SessionExited, Data: "-"},
+	}
+
 	session.quitWriter <- true
 	session.quitReader <- true
 	session.connection.Close()
 	server.mutex.Lock()
 	delete(session.server.sessions, session.ID)
 	server.mutex.Unlock()
-
-	session.server.RequestQueue <- Request{
-		SessionID: session.ID,
-		Response:  Response{Type: SessionExited, Data: "-"},
-	}
 }
 
 func (session *Session) listen() {
@@ -92,7 +92,7 @@ func (session *Session) Read() {
 			message = append(message, lastChunk[:readLength]...)
 
 			if err != nil {
-				if err == io.ErrUnexpectedEOF || err == io.EOF {
+				if err == io.EOF {
 					fmt.Println("Client disconnected ID= ", session.ID)
 					session.leave()
 					break
