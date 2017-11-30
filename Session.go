@@ -75,6 +75,16 @@ func (session *Session) Read() {
 			//Read the length prefix
 			prefix := make([]byte, 4)
 			readLength, err := session.reader.Read(prefix)
+			if err != nil {
+				if err == io.EOF {
+					fmt.Println("Client disconnected ID= ", session.ID)
+					session.leave()
+					break
+				}
+				fmt.Println("Error reading message.", err)
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
 			length := int(binary.BigEndian.Uint32(prefix))
 
 			//Read and join the chunks of data
@@ -84,6 +94,16 @@ func (session *Session) Read() {
 
 			for i := 0; i < chunkAmount-1; i++ {
 				readLength, err = io.ReadFull(session.reader, chunk)
+				if err != nil {
+					if err == io.EOF {
+						fmt.Println("Client disconnected ID= ", session.ID)
+						session.leave()
+						break
+					}
+					fmt.Println("Error reading message.", err)
+					time.Sleep(100 * time.Millisecond)
+					continue
+				}
 				message = append(message, chunk[:readLength]...)
 			}
 
@@ -138,16 +158,26 @@ func (session *Session) Write() {
 			prefix := make([]byte, 4)
 			binary.BigEndian.PutUint32(prefix, uint32(len(encoded)))
 			_, err = session.writer.Write(prefix)
+			if err != nil {
+				if err == io.EOF {
+					fmt.Println("Client disconnected ID= ", session.ID)
+					session.leave()
+					break
+				}
+			}
 
 			//Write chunks
 			chunks := split(encoded, chunkSize)
 			for _, chunk := range chunks {
 				_, err = session.writer.Write(chunk)
-			}
+				if err != nil {
+					if err == io.EOF {
+						fmt.Println("Client disconnected ID= ", session.ID)
+						session.leave()
+						break
+					}
+				}
 
-			if err != nil {
-				fmt.Println("Error writing.", err)
-				break
 			}
 
 			fmt.Println("Sending", response)
