@@ -34,6 +34,7 @@ const (
 	Error                                     //208
 	Notification                              //209
 	SessionExited                             //210
+	DropDb                                    //211
 )
 
 //Server handles input and output from engine
