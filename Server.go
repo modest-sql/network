@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"sync"
 )
@@ -19,6 +20,10 @@ type ResponseType int
 type Response struct {
 	Type ResponseType
 	Data string
+}
+
+func (r Response) String() string {
+	return fmt.Sprintf("{Type: %d, Data: %d bytes}", r.Type, len(r.Data))
 }
 
 //Depending of the desired server response this would be the possibles actions
@@ -64,7 +69,7 @@ func (server *Server) Join(conn net.Conn) {
 	session := NewSession(sessionID, server, conn)
 	server.sessions[sessionID] = session
 	server.mutex.Unlock()
-	fmt.Println("New session created ID= ", sessionID)
+	log.Println("New session created ID= ", sessionID)
 }
 
 //Send send response to session

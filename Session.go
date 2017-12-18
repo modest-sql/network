@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"time"
@@ -77,11 +77,11 @@ func (session *Session) Read() {
 			readLength, err := session.reader.Read(prefix)
 			if err != nil {
 				if err == io.EOF {
-					fmt.Println("Client disconnected ID= ", session.ID)
+					log.Println("Client disconnected ID= ", session.ID)
 					session.leave()
 					break
 				}
-				fmt.Println("Error reading message.", err)
+				log.Println("Error reading message.", err)
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -96,11 +96,11 @@ func (session *Session) Read() {
 				readLength, err = io.ReadFull(session.reader, chunk)
 				if err != nil {
 					if err == io.EOF {
-						fmt.Println("Client disconnected ID= ", session.ID)
+						log.Println("Client disconnected ID= ", session.ID)
 						session.leave()
 						break
 					}
-					fmt.Println("Error reading message.", err)
+					log.Println("Error reading message.", err)
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
@@ -113,11 +113,11 @@ func (session *Session) Read() {
 
 			if err != nil {
 				if err == io.EOF {
-					fmt.Println("Client disconnected ID= ", session.ID)
+					log.Println("Client disconnected ID= ", session.ID)
 					session.leave()
 					break
 				}
-				fmt.Println("Error reading message.", err)
+				log.Println("Error reading message.", err)
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -129,11 +129,11 @@ func (session *Session) Read() {
 			var response Response
 			err = json.Unmarshal(message[:length], &response)
 			if err != nil {
-				fmt.Println("Error decoding answer:", err)
+				log.Println("Error decoding answer:", err)
 				continue
 			}
 
-			fmt.Println("Reading", response)
+			log.Println("Reading", response)
 			//Send the response to the server channel
 			session.server.RequestQueue <- Request{
 				SessionID: session.ID,
@@ -151,7 +151,7 @@ func (session *Session) Write() {
 		case response := <-session.outgoing:
 			encoded, err := json.Marshal(response)
 			if err != nil {
-				fmt.Println("Error encoding:", err)
+				log.Println("Error encoding:", err)
 				continue
 			}
 			//Write Prefix
@@ -160,7 +160,7 @@ func (session *Session) Write() {
 			_, err = session.writer.Write(prefix)
 			if err != nil {
 				if err == io.EOF {
-					fmt.Println("Client disconnected ID= ", session.ID)
+					log.Println("Client disconnected ID= ", session.ID)
 					session.leave()
 					break
 				}
@@ -172,7 +172,7 @@ func (session *Session) Write() {
 				_, err = session.writer.Write(chunk)
 				if err != nil {
 					if err == io.EOF {
-						fmt.Println("Client disconnected ID= ", session.ID)
+						log.Println("Client disconnected ID= ", session.ID)
 						session.leave()
 						break
 					}
@@ -180,7 +180,7 @@ func (session *Session) Write() {
 
 			}
 
-			fmt.Println("Sending", response)
+			log.Println("Sending", response)
 			session.writer.Flush()
 		}
 	}
